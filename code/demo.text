@@ -1,0 +1,202 @@
+package main
+
+import (
+	"encoding/binary"
+	"gonum.org/v1/plot"
+	"gonum.org/v1/plot/plotter"
+	"gonum.org/v1/plot/vg"
+	"os"
+)
+
+const (
+	TRACE_HEADER_SIZE = 240
+	IBM_FLOAT         = 1 // IBM浮点格式
+)
+
+// SEGY文本文件头
+type SegyTextHeader [3200]byte
+
+// SEGY二进制文件头
+type SegyBinaryHeader struct {
+	JobID                       int32
+	LineNumber                  int32
+	ReelNumber                  int32
+	NumTraces                   int32
+	NumAuxTraces                int32
+	SampleInterval              int32
+	SampleIntervalOriginal      int32
+	SamplesPerTrace             int32
+	SamplesPerTraceOriginal     int32
+	DataSampleFormatCode        int16
+	CDPFold                     int16
+	DataTraceSortingCode        int16
+	VerticalSumCode             int16
+	SweepFrequencyStart         int16
+	SweepFrequencyEnd           int16
+	SweepLength                 int16
+	SweepTypeCode               int16
+	TraceNumOfSweepChannel      int16
+	SweepTraceNumOfSweepChannel int16
+	SweepTaperLengthStart       int16
+	SweepTaperLengthEnd         int16
+	TaperTypeCode               int16
+	CorrelatedDataTracesCode    int16
+	BinaryGainRecoveredCode     int16
+	AmplitudeRecoveryMethodCode int16
+	MeasurementSystemCode       int16
+	NumExtendedTextualHeaders   int16
+	Unassigned1                 [8]byte
+}
+
+// SEGY道头
+type SegyTraceHeader struct {
+	InlineNum                    int32 // 道集号（十进制）
+	CrosslineNum                 int32 // 偏移量（十进制）
+	CdpNum                       int32 // 深度采样点号（十进制）
+	TraceNum                     int32 // 这个道的道号（十进制）
+	NumSamples                   int32 // 每个道的采样点数
+	SampleInterval               int32 // 采样间隔，以微秒为单位
+	TraceValueMeasurementUnit    int16 // 这个道的数据类型，用于表示数据类型的参数，如IEEE浮点数、IBM浮点数等
+	TransductionConstantMantissa int32 // 转换常数的系数
+	TransductionConstantPower    int16 // 转换常数的指数
+	ScaleUnit                    int16 // 道值的比例单位
+	TraceValueScalingFactor      int16 // 道值的比例因子
+	TraceValueScalingUnit        int16 // 道值的比例单位
+	Unassigned1                  int16 // 保留未用
+	TraceIdentificationCode      int16 // 道标识代码，表明数据的来源，如SEGY，SU等
+	ScalarTraceHeader            int16 // 每个采样点的数据值的权重因子
+	Unassigned2                  int16 // 保留未用
+}
+
+func main2() {
+	filename := "vel.sgy"
+
+	// 打开SEGY文件
+	file, err := os.Open(filename)
+	if err != nil {
+		panic(err)
+	}
+	defer file.Close()
+
+	// 读取文本文件头
+	var textHeader SegyTextHeader
+	if err := binary.Read(file, binary.BigEndian, &textHeader); err != nil {
+		panic("读取文本文件头出错")
+		panic(err)
+	}
+
+	// 读取二进制文件头
+	var binaryHeader SegyBinaryHeader
+	if err := binary.Read(file, binary.BigEndian, &binaryHeader); err != nil {
+		panic("读取二进制文件头出错")
+		panic(err)
+	}
+
+	// 计算每道数据的长度（包括数据头和地震数据）
+	//dataLength := TRACE_HEADER_SIZE + binaryHeader.NumSamples*2
+
+	// 判断是否采用IBM浮点格式
+	isIbmFloat := binaryHeader.FormatCode == IBM_FLOAT
+	//fmt.Println(binaryHeader.NumTraces)
+	p := plot.New()
+	// 逐个读取地震数据
+	for i := int32(0); i < binaryHeader.NumTraces; i++ {
+		// 读取道头
+		var traceHeader SegyTraceHeader
+		if err := binary.Read(file, binary.BigEndian, &traceHeader); err != nil {
+			panic(err)
+		}
+
+		// 解析地震数据
+		var data []float32
+		if isIbmFloat {
+			// IBM浮点格式，需要进行特殊处理
+			ibmData := make([]int32, binaryHeader.NumSamples)
+			if err := binary.Read(file, binary.BigEndian, &ibmData); err != nil {
+				panic(err)
+			}
+			data = ibmToFloat32(ibmData)
+		} else {
+			// IEEE浮点格式，直接读取即可
+			ieeeData := make([]float32, traceHeader.NumSamples)
+			if err := binary.Read(file, binary.BigEndian, &ieeeData); err != nil {
+				panic(err)
+			}
+			data = ieeeData
+		}
+
+		dt := float64(traceHeader.SampleInterval / 1000)
+
+		// 转换为float64类型
+		floatData := make(plotter.XYs, len(data))
+		for i := range data {
+			floatData[i].X = float64(i) * dt
+			floatData[i].Y = float64(data[i])
+		}
+
+		// 添加数据
+		line, err := plotter.NewLine(floatData)
+		if err != nil {
+			panic(err)
+		}
+		p.Add(line)
+		// 打印道头信息和地震数据
+		//fmt.Printf("Inline=%d, Crossline=%d, CDP=%d, Trace=%d, NumSamples=%d\n", traceHeader.InlineNum, traceHeader.CrosslineNum, traceHeader.CdpNum, traceHeader.TraceNum, traceHeader.NumSamples)
+		//fmt.Println(data)
+	}
+
+	// 设置坐标轴和标题
+	p.X.Label.Text = "Time (s)"
+	p.Y.Label.Text = "Amplitude"
+	p.Title.Text = "SEGY Trace"
+
+	// 保存图像
+	if err := p.Save(4*vg.Inch, 4*vg.Inch, "segy_trace.png"); err != nil {
+		panic(err)
+	}
+}
+func ibmToFloat32(ibmData []int32) []float32 {
+	floatData := make([]float32, len(ibmData))
+	for i, ibm := range ibmData {
+		sign := ibm >> 31 & 1
+		exponent := ibm >> 24 & 0x7F
+		mantissa := ibm & 0xFFFFFF
+		if exponent == 0x7F {
+			if mantissa == 0 {
+				// INF or NAN
+				floatData[i] = float32(0.0)
+			} else {
+				// NAN
+				floatData[i] = float32(float64(mantissa) * 0.25 / float64(1<<23))
+			}
+		} else if exponent == 0 {
+			if mantissa == 0 {
+				// Zero
+				floatData[i] = float32(0.0)
+			} else {
+				// Subnormal
+				floatData[i] = float32(float64(mantissa) * 0.25 / float64(1<<23) * pow2(-126))
+			}
+		} else {
+			// Normal
+			floatData[i] = float32((float64(mantissa)*0.25/float64(1<<23) + 1.0) * pow2(exponent-127))
+		}
+
+		if sign == 1 {
+			floatData[i] = -floatData[i]
+		}
+	}
+	return floatData
+}
+
+func pow2(n int32) float64 {
+	if n > 0 {
+		return 2.0 * pow2(n-1)
+	} else if n < 0 {
+		return 0.5 * pow2(n+1)
+	} else {
+		return 1.0
+	}
+}
+
+//在这份代码中，我们对 `SegyTraceHeader` 结构体中的 `TraceValueMeasurementUnit` 字段进行了修改，将其设置为 `IBM_FLOAT`，以支持IBM浮点
