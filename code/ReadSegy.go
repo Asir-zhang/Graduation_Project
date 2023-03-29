@@ -1,10 +1,17 @@
 package main
 
+import (
+	"encoding/binary"
+	"os"
+)
+
 type TextHeader [3200]byte
 
 const (
 	IBM_FLOAT = 1 // IBM浮点格式
 )
+
+var file *os.File
 
 type BinaryHeader struct {
 	NoJob                 int32
@@ -126,4 +133,63 @@ type TraceHeader struct {
 	DeviceID              int16
 	ScaleT                int16
 	Reserved              [6]int32
+}
+
+// 绑定源文件
+func setSource(filename string) {
+	tfile, err := os.Open(filename)
+	if err != nil {
+		panic("打开文件出错")
+		panic(err)
+	}
+	file = tfile
+}
+
+// 获取文件头
+func getHeader() (TextHeader, BinaryHeader) {
+	if file == nil {
+		panic("未绑定源文件")
+	}
+	var textHeader TextHeader
+	if err := binary.Read(file, binary.BigEndian, &textHeader); err != nil {
+		panic("读取文本文件头出错")
+		panic(err)
+	}
+	var binaryHeader BinaryHeader
+	if err := binary.Read(file, binary.BigEndian, &binaryHeader); err != nil {
+		panic("读取二进制文件头出错")
+		panic(err)
+	}
+	return textHeader, binaryHeader
+
+}
+
+// 获取道头,道数据
+func nextTraceHeader(isIbmFloat bool) (TraceHeader, []float32) {
+	if file == nil {
+		panic("未绑定源文件")
+	}
+	var traceHeader TraceHeader
+	if err := binary.Read(file, binary.BigEndian, &traceHeader); err != nil {
+		panic("读取道头出错")
+		panic(err)
+	}
+	// 解析地震数据
+	var data []float32
+	if isIbmFloat {
+		// IBM浮点格式，需要进行特殊处理
+		ibmData := make([]uint32, traceHeader.SampleNum)
+		if err := binary.Read(file, binary.BigEndian, &ibmData); err != nil {
+			panic(err)
+		}
+		data = ibmToIeeeArr(ibmData)
+	} else {
+		// IEEE浮点格式，直接读取即可
+		ieeeData := make([]float32, traceHeader.SampleNum)
+		if err := binary.Read(file, binary.BigEndian, &ieeeData); err != nil {
+			panic(err)
+		}
+		data = ieeeData
+	}
+	return traceHeader, data
 }

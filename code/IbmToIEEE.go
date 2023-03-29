@@ -1,42 +1,23 @@
 package main
 
-import "math"
+import (
+	"math"
+)
 
-func ibmToFloat(ibm []int32) []float32 {
-	ieee := make([]float32, len(ibm))
-
-	for i, ibmInt := range ibm {
-		// Extract sign, exponent, and fraction from IBM float
-		sign := (uint32(ibmInt) & 0x80000000) != 0
-		exp := int32(ibmInt >> 24 & 0x7f)
-		frac := ibmInt & 0xffffff
-
-		// Calculate the exponent and mantissa of the IEEE float
-		var ieeeExp int32
-		var ieeeMant uint32
-		if exp == 0 {
-			// Zero or denormalized value
-			ieeeExp = -126
-			for frac != 0 {
-				ieeeExp--
-				frac <<= 1
-			}
-			ieeeMant = uint32(frac << 8)
-		} else {
-			// Normalized value
-			ieeeExp = exp - 64
-			ieeeMant = uint32(frac << 7)
-			ieeeMant |= uint32(1) << 31
-		}
-
-		// Combine sign, exponent, and mantissa to get IEEE float
-		ieeeInt := uint32(ieeeExp+127) << 23
-		ieeeInt |= ieeeMant
-		if sign {
-			ieeeInt |= 0x80000000
-		}
-		ieee[i] = math.Float32frombits(ieeeInt)
+func ibmToIeeeArr(ibmDataUint []uint32) []float32 {
+	ieeeArr := make([]float32, len(ibmDataUint))
+	for i, temp := range ibmDataUint {
+		ieeeArr[i] = ibmToIeee(temp)
 	}
+	return ieeeArr
+}
 
-	return ieee
+func ibmToIeee(ibmData uint32) float32 {
+	// 获取IBM格式数据的符号位、指数和尾数
+	sign := ibmData >> 31 & 0x01
+	exponent := int(ibmData>>24&0x7f) - 64
+	mantissa := float32(ibmData&0xffffff) / (1 << 24)
+	// 计算IEEE格式数据的值
+	ieeeData := math.Float32frombits(uint32(sign)<<31 | uint32(exponent+127)<<23 | uint32(mantissa*(1<<23)))
+	return ieeeData
 }
